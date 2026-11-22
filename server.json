@@ -3,8 +3,20 @@
   "name": "by.ai-tender/tenders",
   "title": "AI-TENDER — open procurements of Belarus",
   "description": "Open public procurements of Belarus: search by words or customer UNP, source link for each.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "websiteUrl": "https://ai-tender.by/zakupki.php",
+  "repository": {
+    "url": "https://github.com/Apex-prim/ai-tender-mcp",
+    "source": "github",
+    "id": "1467639271"
+  },
+  "icons": [
+    {
+      "src": "https://ai-tender.by/assets/social/logo-ai-tender-512.png",
+      "mimeType": "image/png",
+      "sizes": ["512x512"]
+    }
+  ],
   "remotes": [
     {
       "type": "streamable-http",
