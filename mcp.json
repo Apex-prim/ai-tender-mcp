@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ai-tender": {
+      "type": "streamable-http",
+      "url": "https://ai-tender.by/mcp"
+    }
+  }
+}

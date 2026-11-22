@@ -1,0 +1,14 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "by.ai-tender/tenders",
+  "title": "AI-TENDER — open procurements of Belarus",
+  "description": "Open public procurements of Belarus: search by words or customer UNP, source link for each.",
+  "version": "1.0.0",
+  "websiteUrl": "https://ai-tender.by/zakupki.php",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://ai-tender.by/mcp"
+    }
+  ]
+}

@@ -1,0 +1,610 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AI-TENDER — открытые закупки Беларуси для машин",
+    "version": "1.0.0",
+    "summary": "Открытые закупки Беларуси и проверка контрагента по УНП. Без ключа.",
+    "description": "Машине отдаётся ровно то, что человек видит на публичной карточке закупки (/zakupka.php), и ни полем больше. Сведения взяты у площадки-первоисточника и показаны как есть. Здесь нет оценок, баллов, «шансов», рекомендаций участвовать и рекомендованных цен — по устройству, а не по недосмотру. Три исхода везде: да / нет / не установлено; «не знаем» не равно «нет». Отказы — RFC 9457 (application/problem+json) с полями why и retryable, тем же языком, что у службы проверки AI-BELARUS. Порядок работы для агентов — /llms.txt.",
+    "contact": {
+      "name": "ООО «Тендерные машины» — сервис AI-TENDER",
+      "url": "https://ai-tender.by/",
+      "email": "info@ai-tender.by"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://ai-tender.by"
+    }
+  ],
+  "paths": {
+    "/api/public/tenders.php": {
+      "get": {
+        "operationId": "listOpenTenders",
+        "summary": "Лента открытых закупок (срок подачи не прошёл)",
+        "description": "Порядок — по моменту нашей последней сверки закупки с площадкой, затем по id. Запомните поле next и продолжите с него завтра: придёт только сверенное заново или новое. Следующая страница — также в заголовке Link rel=\"next\" (RFC 8288). Повтор с If-None-Match по ETag получает 304 без тела (RFC 9110).",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Значение next из предыдущего ответа, без изменений.",
+            "schema": {
+              "type": "string",
+              "maxLength": 400,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Страница ленты",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Link": {
+                "description": "<…>; rel=\"next\", если есть следующая страница",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenderFeed"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Не изменилось с присланного ETag"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/public/tender.php": {
+      "get": {
+        "operationId": "getOpenTender",
+        "summary": "Одна открытая закупка — наша запись или выпуск OCDS 1.1",
+        "description": "format=ocds отдаёт OCDS 1.1 release package — только когда у нас есть префикс OCID, выданный Open Contracting Partnership; до этого — 501 ocds_prefix_not_registered, а не выдуманный идентификатор.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Идентификатор вида «goszakupki:3653566».",
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "pattern": "^[a-z_]+:[A-Za-z0-9._:/-]+$"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "ocds"
+              ],
+              "default": "json"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Закупка",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TenderEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "description": "OCDS 1.1 release package: https://standard.open-contracting.org/latest/en/schema/release_package/"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Не изменилось с присланного ETag"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "501": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/counterparty_check.php": {
+      "get": {
+        "operationId": "checkCounterparty",
+        "summary": "Проверка контрагента по УНП по государственным реестрам",
+        "description": "Ответ — службы AI-BELARUS (контракт aib-counterparty-check-v1); поля answer описаны словарём https://ai-belarus.by/v1/meta/vocabulary. Сведения о юридических лицах раскрываются, об индивидуальных предпринимателях — нет (разный применимый закон). Не чаще 30 обращений за 10 минут с одного адреса.",
+        "parameters": [
+          {
+            "name": "unp",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{9}$"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "description": "Наименование, как в договоре, — для сверки.",
+            "schema": {
+              "type": "string",
+              "maxLength": 300
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ответ службы проверки",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "summary": {},
+                    "answer": {}
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/LegacyError"
+          },
+          "429": {
+            "$ref": "#/components/responses/LegacyError"
+          },
+          "502": {
+            "$ref": "#/components/responses/LegacyError"
+          }
+        }
+      }
+    },
+    "/api/public/search.php": {
+      "get": {
+        "operationId": "searchOpenTenders",
+        "summary": "Поиск открытых закупок Беларуси",
+        "description": "Open public procurements of Belarus (deadline not passed) by words in the title or customer name, or by customer UNP (9 digits); optional region. Ordered by deadline. No scores or advice.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Слова из названия или заказчика, либо УНП заказчика.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "required": false,
+            "description": "Область, как на /zakupki.php.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 25,
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Найденные открытые закупки",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenderFeed"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "Problem": {
+        "description": "Отказ RFC 9457",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "LegacyError": {
+        "description": "Отказ проверки контрагента",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "ok",
+                "error",
+                "retryable"
+              ],
+              "properties": {
+                "ok": {
+                  "const": false
+                },
+                "error": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "required": [
+          "type",
+          "code",
+          "title",
+          "status",
+          "retryable",
+          "why"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid_cursor",
+              "invalid_id",
+              "not_found",
+              "ocds_prefix_not_registered",
+              "too_many",
+              "unavailable"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Имеет ли смысл повторить тот же запрос."
+          },
+          "why": {
+            "type": "string",
+            "description": "Почему отказано — словами."
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "TenderFeed": {
+        "type": "object",
+        "required": [
+          "contract",
+          "as_of",
+          "count",
+          "next",
+          "items"
+        ],
+        "properties": {
+          "contract": {
+            "const": "ai-tender-public-tender-v1"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "order": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Курсор следующей страницы; null — страниц больше нет."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tender"
+            }
+          }
+        }
+      },
+      "TenderEnvelope": {
+        "type": "object",
+        "required": [
+          "contract",
+          "as_of",
+          "tender"
+        ],
+        "properties": {
+          "contract": {
+            "const": "ai-tender-public-tender-v1"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tender": {
+            "$ref": "#/components/schemas/Tender"
+          }
+        }
+      },
+      "Tender": {
+        "type": "object",
+        "description": "Ровно поля публичной карточки. null — «сведений нет», а не догадка.",
+        "required": [
+          "id",
+          "url",
+          "title",
+          "customer",
+          "region",
+          "procedure",
+          "okrb",
+          "deadline",
+          "price",
+          "delivery_place",
+          "published",
+          "source",
+          "provenance"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Карточка для человека."
+          },
+          "title": {
+            "type": "string"
+          },
+          "customer": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "unp": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "procedure": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "number": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "okrb": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Код ОКРБ 007-2012, как у площадки."
+          },
+          "deadline": {
+            "type": "object",
+            "properties": {
+              "date": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date"
+              },
+              "time": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "HH:MM по Минску; null — площадка часа не указала."
+              },
+              "time_note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "price": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "currency": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "ISO 4217 как у площадки; null — не названа (не подставляется)."
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "delivery_place": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "published": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uri"
+              }
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "shown_as_published_by": {
+                "type": "string"
+              },
+              "our_last_sync": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Когда МЫ последний раз сверили закупку с площадкой (Минск)."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
